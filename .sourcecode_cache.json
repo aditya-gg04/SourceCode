@@ -1,0 +1,10 @@
+{
+  "src/core/aiClient.ts": "a9c47f58d6ba46ae7f5a427e591ba20e229d16f52e8083e1a4504b0d4c8c93b7",
+  "src/core/analyzer.ts": "a14c2a983b34f7d326d875e6f1ba6234c39b7b22febd8e7dd5aa27eb7380eb31",
+  "src/core/indexer.ts": "1ceeeb37dfd156d16f3a87588daad8bb76c2a582d27da4072d53a37d5b8fe539",
+  "src/core/repoManager.ts": "e93a91ed1301dbc18f9dddc0cdf81be639668115152e806946008640a8b6cc22",
+  "src/index.tsx": "a0d124d2dec7c6c126b619aaaf46dcdbe0f3d791db1ebf9499fcbef16ca669be",
+  "src/tui/App.tsx": "f7dd7903f8931625da6debb2bb941002e9c1aeea00ba8ed04113713a12efdf93",
+  "src/types/tree-sitter.d.ts": "f4c21ebf422859d0de7ef20f1e59601c733176e0951e171c355b80db09daec56",
+  "tests/repoManager.test.ts": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

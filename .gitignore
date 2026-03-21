@@ -1,0 +1,6 @@
+node_modules/
+dist/
+build/
+.env
+.sourcecode_cache.json
+*.log
