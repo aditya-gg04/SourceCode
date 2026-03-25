@@ -1,15 +1,15 @@
-import { Ollama } from "@langchain/ollama";
+import { ChatOllama } from "@langchain/ollama";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Indexer } from "./indexer.js";
 
 export class AIClient {
-  private llm: Ollama;
+  private llm: ChatOllama;
   private indexer: Indexer;
 
   constructor(indexer: Indexer) {
     // Requires a local Ollama server running. E.g., `ollama run llama3`
-    this.llm = new Ollama({
+    this.llm = new ChatOllama({
       model: "llama3", // default model, can be configured
       temperature: 0.1,
     });
@@ -48,36 +48,50 @@ Explanation:
       });
     } catch (e) {
       console.error("Error generating explanation:", e);
-      return "Error generating explanation. Check your OpenAI API Key.";
+      return "Error generating explanation. Ensure Ollama is running and 'llama3' is pulled.";
     }
   }
 
   /**
-   * Performs semantic search and optionally asks the LLM a question based on results.
+   * Performs semantic search and optionally asks the LLM a question based on results and current file.
    */
-  public async queryCodebase(query: string): Promise<string> {
+  public async queryCodebase(query: string, currentFile?: { path: string, content: string }): Promise<string> {
     // 1. Search vector DB
     const searchResults = await this.indexer.search(query, 3);
     
-    if (!searchResults || searchResults.length === 0) {
+    if ((!searchResults || searchResults.length === 0) && !currentFile) {
       return "No relevant code found for your query.";
     }
 
     // 2. Format context
     let context = "";
-    searchResults.forEach((res, i) => {
-      context += `\n--- Result ${i + 1} (${res.metadata?.source || 'unknown'}) ---\n${res.content}\n`;
-    });
+    if (currentFile) {
+      context += `\n====== CURRENTLY SELECTED FILE (${currentFile.path}) ======\n${currentFile.content.slice(0, 3000)}\n=========================================\n`;
+    }
+
+    if (searchResults && searchResults.length > 0) {
+      context += `\n====== ADDITIONAL SEARCH RESULTS ======\n`;
+      searchResults.forEach((res, i) => {
+        if (currentFile && res.metadata?.source === currentFile.path) return; // avoid duplicate
+        context += `\n--- Result ${i + 1} (${res.metadata?.source || 'unknown'}) ---\n${res.content}\n`;
+      });
+      context += `=======================================\n`;
+    }
 
     // 3. Ask LLM
     const template = `
-Use the following codebase snippets to answer the user's question. If the snippets don't contain the answer, say so.
+You are an expert programming assistant embedded in a code editor. 
+The user is asking a question about their codebase.
+If they say "this file" or "the file", they are referring to the CURRENTLY SELECTED FILE provided below.
+You must prioritize answering their question using the CURRENTLY SELECTED FILE.
+If their question requires other files, use the ADDITIONAL SEARCH RESULTS if available.
 
-Code Snippets:
+CODE CONTEXT:
 {context}
 
-Question: {query}
+USER QUESTION: {query}
 
+Provide an EXHAUSTIVE, HIGHLY DETAILED, and step-by-step explanatory answer based ONLY on the provided code context. Break down your reasoning. If you don't know the answer, say so.
 Answer:
 `;
     const prompt = PromptTemplate.fromTemplate(template);
@@ -87,7 +101,7 @@ Answer:
       return await chain.invoke({ context: context.slice(0, 5000), query });
     } catch (e) {
       console.error("Error querying codebase:", e);
-      return "Error generating response. Check your OpenAI API Key.";
+      return "Error generating response. Ensure Ollama is running and 'llama3' is pulled.";
     }
   }
 }

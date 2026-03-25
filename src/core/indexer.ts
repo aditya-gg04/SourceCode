@@ -20,6 +20,8 @@ export class Indexer {
 
   constructor(targetDir: string) {
     this.targetDir = targetDir;
+    const hash = crypto.createHash('md5').update(targetDir).digest('hex');
+    this.collectionName = `repo_${hash}`;
     this.client = new ChromaClient({ path: "http://localhost:8000" }); // Assuming a local chromadb server or in-memory
     this.cachePath = path.join(targetDir, '.sourcecode_cache.json');
     this.loadCache();

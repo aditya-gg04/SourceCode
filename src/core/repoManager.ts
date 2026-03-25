@@ -7,7 +7,11 @@ export class RepoManager {
   private git = simpleGit();
 
   constructor(targetDir: string) {
-    this.targetDir = path.resolve(targetDir);
+    if (targetDir.startsWith('http://') || targetDir.startsWith('https://')) {
+      this.targetDir = process.cwd(); // Will clone into current directory
+    } else {
+      this.targetDir = path.resolve(targetDir);
+    }
   }
 
   /**

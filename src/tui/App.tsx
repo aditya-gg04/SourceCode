@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
+import fs from 'fs';
 import { RepoManager } from '../core/repoManager.js';
 import { Indexer } from '../core/indexer.js';
 import { Analyzer, AnalysisResult } from '../core/analyzer.js';
@@ -11,18 +12,23 @@ type AppProps = {
 };
 
 export default function App({ repositoryPath = '.' }: AppProps) {
+  const [currentRepo, setCurrentRepo] = useState(repositoryPath);
   const [status, setStatus] = useState<string>('Initializing...');
   const [files, setFiles] = useState<string[]>([]);
   
   // Selection state
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [aiExplanation, setAiExplanation] = useState<string>('');
   
-  // Mode state
-  const [mode, setMode] = useState<'tree' | 'search'>('tree');
+  // Scroll & Mode state
+  const [mode, setMode] = useState<'tree' | 'search' | 'repo'>('tree');
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [query, setQuery] = useState('');
-  const [searchResult, setSearchResult] = useState('');
+  
+  // AI Outputs
+  const [aiOutput, setAiOutput] = useState('');
+  const [aiOutputTitle, setAiOutputTitle] = useState('AI Answers');
+  const [repoInput, setRepoInput] = useState('');
 
   // Services
   const [analyzer, setAnalyzer] = useState<Analyzer | null>(null);
@@ -31,9 +37,9 @@ export default function App({ repositoryPath = '.' }: AppProps) {
   useEffect(() => {
     async function loadWorkspace() {
       try {
-        setStatus(`Setting up workspace at ${repositoryPath}...`);
-        const repoManager = new RepoManager(repositoryPath);
-        const targetDir = await repoManager.setup(repositoryPath);
+        setStatus(`Setting up workspace at ${currentRepo}...`);
+        const repoManager = new RepoManager(currentRepo);
+        const targetDir = await repoManager.setup(currentRepo);
         
         setStatus(`Scanning files in ${targetDir}...`);
         const sourceFiles = repoManager.getFiles(targetDir);
@@ -53,19 +59,21 @@ export default function App({ repositoryPath = '.' }: AppProps) {
         let count = 0;
         for (const file of sourceFiles) {
           if (indexer.hasChanged(file)) {
-            // For a real app, read content:
-            // const content = fs.readFileSync(file, 'utf-8');
-            // await indexer.indexFile(file, content, { type: 'source' });
+            const content = fs.readFileSync(file, 'utf-8');
+            await indexer.indexFile(file, content, { type: 'source' });
             count++;
             setStatus(`Indexing: ${count}/${sourceFiles.length} (Changed files)`);
           }
         }
         indexer.finish();
         
-        setStatus('Ready. Press Tab to switch between File Tree and Search. Use Up/Down to navigate files. Press E to explain file.');
+        setStatus('Ready. Press Tab to switch panels. Use Up/Down to navigate. E to explain file.');
         if (sourceFiles.length > 0) {
+            setSelectedIndex(0);
             setAnalysis(azer.analyzeFile(sourceFiles[0]));
         }
+        setAiOutput('');
+        setAiOutputTitle('AI Answers');
 
       } catch (err: any) {
         setStatus(`Error: ${err.message}`);
@@ -73,7 +81,12 @@ export default function App({ repositoryPath = '.' }: AppProps) {
     }
 
     loadWorkspace();
-  }, [repositoryPath]);
+  }, [currentRepo]);
+
+  // Reset scroll when switching things
+  useEffect(() => {
+    setScrollOffset(0);
+  }, [selectedIndex, aiOutput, mode]);
 
   useInput((input, key) => {
     if (mode === 'tree') {
@@ -87,10 +100,16 @@ export default function App({ repositoryPath = '.' }: AppProps) {
       if (input === 'e' && aiClient && files[selectedIndex]) {
         explainCurrentFile();
       }
+    } else {
+      // In search or repo mode, up/down arrows can scroll the AI Answers panel
+      if (key.upArrow) setScrollOffset(Math.max(0, scrollOffset - 1));
+      if (key.downArrow) setScrollOffset(scrollOffset + 1);
     }
 
     if (key.tab) {
-        setMode(mode === 'tree' ? 'search' : 'tree');
+        if (mode === 'tree') setMode('search');
+        else if (mode === 'search') setMode('repo');
+        else setMode('tree');
     }
   });
 
@@ -98,30 +117,67 @@ export default function App({ repositoryPath = '.' }: AppProps) {
   useEffect(() => {
     if (analyzer && files.length > 0 && files[selectedIndex]) {
       setAnalysis(analyzer.analyzeFile(files[selectedIndex]));
-      setAiExplanation(''); // clear previous explanation
+      setAiOutput(''); // clear previous explanation
+      setAiOutputTitle('AI Answers');
     }
   }, [selectedIndex, files, analyzer]);
 
   const explainCurrentFile = async () => {
     if (!aiClient || !files[selectedIndex]) return;
     setStatus('Generating AI explanation...');
-    const result = await aiClient.explainFile(files[selectedIndex], "// code placeholder", analysis);
-    setAiExplanation(result);
-    setStatus('Ready. Press Tab to switch to search. Press E to explain file.');
+    setAiOutputTitle('File Explanation');
+    setAiOutput('');
+    
+    let fileContent = '';
+    try {
+      fileContent = fs.readFileSync(files[selectedIndex], 'utf-8');
+    } catch(e) {
+      fileContent = '// Error reading file';
+    }
+
+    const result = await aiClient.explainFile(files[selectedIndex], fileContent, analysis);
+    setAiOutput(result);
+    setStatus('Ready. Press Tab to switch panels. Up/Down blocks to scroll AI output.');
   };
 
   const submitSearch = async (q: string) => {
     if (!aiClient || !q) return;
     setStatus('Querying AI codebase search...');
-    setSearchResult('');
-    const result = await aiClient.queryCodebase(q);
-    setSearchResult(result);
-    setStatus('Ready. Press Tab to switch between File Tree and Search. Press E to explain file.');
+    setAiOutputTitle('Search Results');
+    setAiOutput('');
+    
+    let currentFileCtx;
+    if (files[selectedIndex]) {
+      try {
+        const content = fs.readFileSync(files[selectedIndex], 'utf-8');
+        currentFileCtx = { path: files[selectedIndex], content };
+      } catch (e) {
+        // ignore read error
+      }
+    }
+
+    const result = await aiClient.queryCodebase(q, currentFileCtx);
+    setAiOutput(result);
+    // Stay in search mode to let user scroll results
+    setStatus('Ready. Use Up/Down arrows to scroll AI Answers panel.');
+  };
+
+  const submitRepo = (r: string) => {
+    if (r) {
+      setCurrentRepo(r);
+      setMode('tree');
+      setRepoInput('');
+    }
+  }
+
+  const renderScrolledText = (text: string) => {
+    if (!text) return '';
+    const lines = text.split('\n');
+    return lines.slice(scrollOffset).join('\n');
   };
 
   const selectedFile = files[selectedIndex];
   
-  // Calculate which part of the file list to show (scroll window)
   const windowSize = 10;
   const startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(windowSize / 2), files.length - windowSize));
   const visibleFiles = files.slice(startIndex, startIndex + windowSize);
@@ -135,10 +191,10 @@ export default function App({ repositoryPath = '.' }: AppProps) {
         <Text color="gray">{status}</Text>
       </Box>
 
-      <Box flexDirection="row" flexGrow={1}>
-        {/* Left Panel: File Tree */}
-        <Box borderStyle={mode === 'tree' ? 'double' : 'round'} borderColor={mode === 'tree' ? 'yellow' : 'blue'} width="30%" flexDirection="column" padding={1}>
-          <Text bold color="blue">File Tree ({files.length} files)</Text>
+      <Box flexDirection="row" flexGrow={1} overflowY="hidden">
+        {/* Left Panel: File Tree (25%) */}
+        <Box borderStyle={mode === 'tree' ? 'double' : 'round'} borderColor={mode === 'tree' ? 'yellow' : 'blue'} width="25%" flexDirection="column" padding={1}>
+          <Text bold color="blue">File Tree ({files.length})</Text>
           <Box flexDirection="column" marginTop={1}>
             {visibleFiles.map((f, i) => {
               const actualIndex = startIndex + i;
@@ -153,25 +209,20 @@ export default function App({ repositoryPath = '.' }: AppProps) {
           </Box>
         </Box>
 
-        {/* Right Panel: Context & Analysis */}
-        <Box borderStyle="round" borderColor="magenta" width="70%" flexDirection="column" padding={1}>
-           <Text bold color="magenta">Context Panel</Text>
+        {/* Middle Panel: Context & Analysis (35%) */}
+        <Box borderStyle="round" borderColor="cyan" width="35%" flexDirection="column" padding={1} overflowY="hidden">
+           <Text bold color="cyan">Code Context</Text>
            {selectedFile ? (
-               <Box flexDirection="column" marginTop={1}>
-                   <Text>Selected: <Text color="cyan">{selectedFile}</Text></Text>
+               <Box flexDirection="column" marginTop={1} overflowY="hidden">
+                   <Text>Selected: <Text color="cyan" wrap="truncate">{selectedFile}</Text></Text>
                    
-                   {aiExplanation ? (
-                     <Box marginTop={1} flexDirection="column">
-                        <Text bold color="green">AI Explanation:</Text>
-                        <Text>{aiExplanation}</Text>
-                     </Box>
-                   ) : analysis && (
-                       <Box flexDirection="column" marginTop={1}>
+                   {analysis && (
+                       <Box flexDirection="column" marginTop={1} overflowY="hidden">
                            <Text bold>Entities found ({analysis.entities.length}):</Text>
                            {analysis.entities.slice(0, 7).map((e, idx) => (
-                               <Text key={idx}>{e.type}: {e.name} (Lines {e.startLine}-{e.endLine})</Text>
+                               <Text key={idx} wrap="truncate">{e.type}: {e.name} (Lines {e.startLine}-{e.endLine})</Text>
                            ))}
-                           {analysis.entities.length > 7 && <Text color="gray">...and {analysis.entities.length - 7} more. Press 'e' for AI analysis.</Text>}
+                           {analysis.entities.length > 7 && <Text color="gray">...and {analysis.entities.length - 7} more.</Text>}
                        </Box>
                    )}
                </Box>
@@ -179,26 +230,47 @@ export default function App({ repositoryPath = '.' }: AppProps) {
                <Text>No file selected.</Text>
            )}
         </Box>
+
+        {/* Right Panel: AI Answers (40%) */}
+        <Box borderStyle="round" borderColor="magenta" width="40%" flexDirection="column" padding={1} overflowY="hidden">
+           <Text bold color="magenta">
+              {mode !== 'tree' ? `${aiOutputTitle} (Up/Down to scroll)` : aiOutputTitle}
+           </Text>
+           <Box flexDirection="column" marginTop={1} overflowY="hidden">
+               {aiOutput ? (
+                 <Text color={mode === 'search' ? 'white' : 'green'}>{renderScrolledText(aiOutput)}</Text>
+               ) : (
+                 <Text color="gray">Press 'E' to explain selected file, or use the Search Query box below.</Text>
+               )}
+           </Box>
+        </Box>
       </Box>
 
       {/* Footer / Query Input */}
-      <Box borderStyle={mode === 'search' ? 'double' : 'round'} borderColor={mode === 'search' ? 'cyan' : 'gray'} padding={1} flexDirection="column">
-        <Box flexDirection="row">
-          <Text color="cyan" bold>Query &gt; </Text>
-          {mode === 'search' ? (
+      <Box borderStyle={mode === 'search' || mode === 'repo' ? 'double' : 'round'} borderColor={mode === 'search' ? 'magenta' : mode === 'repo' ? 'yellow' : 'gray'} padding={1} flexDirection="column">
+        {mode === 'repo' ? (
+           <Box flexDirection="row">
+             <Text color="yellow" bold>Enter Repo Path/URL &gt; </Text>
              <TextInput 
-               value={query} 
-               onChange={setQuery} 
-               onSubmit={submitSearch}
-               placeholder="Ask a question about the code..." 
+               value={repoInput} 
+               onChange={setRepoInput} 
+               onSubmit={submitRepo}
+               placeholder="e.g. https://github.com/user/project or /path/to/local/dir" 
              />
-          ) : (
-             <Text color="gray">{query || "Press Tab to search..."}</Text>
-          )}
-        </Box>
-        {searchResult && (
-           <Box marginTop={1}>
-             <Text color="magenta">{searchResult}</Text>
+           </Box>
+        ) : (
+           <Box flexDirection="row">
+             <Text color="magenta" bold>Ask AI &gt; </Text>
+             {mode === 'search' ? (
+                <TextInput 
+                  value={query} 
+                  onChange={setQuery} 
+                  onSubmit={submitSearch}
+                  placeholder="Ask a codebase question..." 
+                />
+             ) : (
+                <Text color="gray">{query || "Press Tab to enter a query or change repo..."}</Text>
+             )}
            </Box>
         )}
       </Box>
